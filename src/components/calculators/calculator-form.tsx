@@ -73,6 +73,6 @@ export function CalculatorForm({ kind }: { kind: CalculatorKind }) {
       <div className={styles.actions}><span className={styles.helper}>Пересчёт автоматически</span><button type="button" className={styles.secondary} onClick={() => { calculator.reset(); setDraft(toDraft(defaults[kind])); }}>Сбросить данные</button></div>
       <p className={styles.helper}>Начальные значения — пример, не предложение банка. Параметры сохраняются только в этом браузере, если хранилище доступно.</p>
     </form>
-    <ResultPanel kind={kind} result={calculator.result} />
+    <ResultPanel kind={kind} input={calculator.input} result={calculator.result} />
   </div>;
 }
