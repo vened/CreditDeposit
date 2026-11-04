@@ -2,7 +2,8 @@ import Decimal from 'decimal.js';
 import type { Money } from './types';
 
 // A private constructor keeps arithmetic independent of a caller's Decimal config.
-export const FinanceDecimal = Decimal.clone({ precision: 48, rounding: Decimal.ROUND_HALF_UP });
+// 80 digits preserve cents even at the validated ten-year, 1000% daily-compounding limit.
+export const FinanceDecimal = Decimal.clone({ precision: 80, rounding: Decimal.ROUND_HALF_UP });
 
 export function parseDecimalInput(raw: string): string | null {
   const input = raw.trim();
