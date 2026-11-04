@@ -1,10 +1,4 @@
-export default function Home() {
-  return (
-    <main className="foundation-page">
-      <p className="eyebrow">Финансовые калькуляторы · ₽</p>
-      <h1>процент</h1>
-      <p>Сначала посчитайте. Потом решайте.</p>
-      <p className="note">Калькуляторы вклада, накопительного счёта, кредита и карты со счётом находятся в разработке.</p>
-    </main>
-  );
-}
+import { Landing } from '@/components/site/landing';
+import { buildPageMetadata } from '@/lib/site';
+export const metadata = buildPageMetadata('/', 'Финансовые калькуляторы онлайн', 'Посчитайте доход вклада и накопительного счёта, платежи по кредиту и выгоду карты. Ручной ввод условий, понятная расшифровка, без регистрации.');
+export default function Home() { return <Landing />; }

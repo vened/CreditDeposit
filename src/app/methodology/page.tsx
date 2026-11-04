@@ -1,0 +1,8 @@
+import Link from 'next/link';
+import { methodologySections, methodologySources } from '@/content/methodology';
+import { buildPageMetadata } from '@/lib/site';
+import styles from '@/components/site/site.module.css';
+export const metadata = buildPageMetadata('/methodology', 'Методика расчёта и допущения', 'Как считаем проценты, дни, капитализацию, кредит и выгоду карты. Понятные формулы, границы моделей, приватность и первичные источники.');
+export default function MethodologyPage() {
+  return <main id="main-content" className={styles.article}><Link href="/">← На главную</Link><p className="eyebrow">Понятная математика</p><h1>Как мы считаем</h1><p>Формулы, даты и допущения, от которых зависит результат. Сверьте их со своими условиями перед расчётом.</p><nav aria-label="Разделы методики">{methodologySections.map(section => <a key={section.id} href={`#${section.id}`}>{section.title.split(':')[0]}</a>)}<a href="#sources">Источники</a></nav>{methodologySections.map(section => <section key={section.id} id={section.id}><h2>{section.title}</h2>{section.paragraphs.map(text => <p key={text}>{text}</p>)}</section>)}<section id="sources"><h2>Источники и банковские различия</h2><p>Источники использованы при подготовке методики 4 ноября 2026 года. Они поясняют различия условий; модель сервиса описана выше и не воспроизводит каждый банковский договор. Актуальные тарифные ставки в приложение не переносятся.</p><ul>{methodologySources.map(source => <li key={source.url}><a href={source.url}>{source.title}</a> — {source.note}</li>)}</ul></section><p><Link href="/#calculators">Перейти к калькуляторам ↗</Link></p></main>;
+}

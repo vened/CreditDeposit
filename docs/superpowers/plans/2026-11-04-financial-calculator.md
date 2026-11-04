@@ -171,7 +171,7 @@ type Validation<T> = { ok: true; value: T } | { ok: false; issues: FieldIssue[] 
 
 ## Task 6: Лендинг, методика и честные SEO-метаданные
 
-**Files:** Create `src/components/site/{header,footer,landing}.tsx` и CSS Modules; `src/content/methodology.ts`, `src/lib/site.ts`, `src/lib/site.test.ts`, `src/app/methodology/page.tsx`, `src/app/robots.ts`, `src/app/sitemap.ts`, `src/app/opengraph-image.tsx`; Modify `src/app/layout.tsx`, `src/app/page.tsx`, `src/app/globals.css` и четыре calculator/page.tsx.
+**Files:** Create `src/components/site/{header,footer,landing}.tsx` и CSS Modules; `src/content/methodology.ts`, `src/lib/site.ts`, `src/lib/site.test.ts`, `src/app/methodology/page.tsx`, `src/app/robots.ts`, `src/app/sitemap.ts`, `src/app/share-image/route.ts`, `src/lib/og-image.tsx`; Modify `src/app/layout.tsx`, `src/app/page.tsx`, `src/app/globals.css` и четыре calculator/page.tsx. Уточнение при реализации: обычный маршрут share-image вместо файлового OG-соглашения, поскольку последнее автоматически добавляет localhost при отсутствии домена; изображение подключается к метаданным только после настройки публичного URL.
 
 **Consumes:** утверждённый v3-макет, формы Task 5. **Produces:** шесть индексируемых содержательных страниц (лендинг, 4 калькулятора, методика); `getSiteUrl(envValue:string|undefined):URL|null`, `buildPageMetadata(path:string,title:string,description:string):Metadata`.
 

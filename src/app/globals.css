@@ -27,3 +27,7 @@ h1, h2 { font-family: var(--serif); font-weight: 400; line-height: 1.1; }
 .foundation-page h1 { font-size: clamp(48px, 10vw, 76px); letter-spacing: -2px; margin: 24px 0; }
 .eyebrow { text-transform: uppercase; font-size: var(--caption); letter-spacing: 1.4px; }
 .note { color: var(--muted); font-size: var(--caption); max-width: 540px; }
+
+html { scroll-behavior: smooth; }
+section[id] { scroll-margin-top: 24px; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
