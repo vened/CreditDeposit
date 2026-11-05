@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { validateInput } from './validation';
-import type { CardInput, DepositInput, LoanInput, SavingsInput } from './types';
+import type { CardPlanningInput, DepositInput, LoanInput, SavingsInput } from './types';
 
 const savings: SavingsInput = {
   openingBalance: '100000.00', annualRate: '12', startDate: '2026-01-01', endDate: '2027-01-01',
@@ -8,7 +8,8 @@ const savings: SavingsInput = {
 };
 const deposit: DepositInput = { openingBalance: '100000.00', annualRate: '12', startDate: '2026-01-01', endDate: '2027-01-01', payout: 'maturity', capitalize: true, events: [], rateChanges: [] };
 const loan: LoanInput = { principal: '100000', annualRate: '12', months: 12, issuedOn: '2026-01-31', scheme: 'annuity', upfrontFee: '0', monthlyFee: '0' };
-const card: CardInput = { ownFunds: '100000', purchaseAmount: '50000', creditLimit: '80000', purchaseDate: '2026-01-01', repaymentDate: '2026-02-01', fees: '0', repayments: [], savings: { annualRate: '12', basis: 'daily', payout: 'monthly', capitalize: true, partialMonths: 'actual', rateChanges: [] } };
+const card: CardPlanningInput = { ownFunds: '100000', monthlySpending: '50000', spendingOverrides: {}, creditLimit: '80000', startDate: '2026-01-01', endDate: '2026-02-28', repaymentDay: 31, fees: '0', topUps: [], recurringTopUps: [], repayments: [], savings: { annualRate: '12', basis: 'daily', payout: 'monthly', capitalize: true, partialMonths: 'actual', rateChanges: [] } };
+const recurring = { amount: '1000', startDate: '2026-01-01', endDate: '', frequency: 'monthly' as const };
 function paths(result: ReturnType<typeof validateInput>) {
   return result.ok ? [] : result.issues.map(issue => issue.path);
 }
@@ -67,13 +68,72 @@ describe('financial input validation', () => {
     for (const months of [0, 601, 1.5, '12']) expect(paths(validateInput('loan', { ...loan, months }))).toContain('months');
     expect(paths(validateInput('loan', { ...loan, principal: '0', upfrontFee: '-1', monthlyFee: '0.001', scheme: 'other', issuedOn: 'bad' }))).toEqual(expect.arrayContaining(['principal', 'upfrontFee', 'monthlyFee', 'scheme', 'issuedOn']));
   });
-  it('bounds card funds, dates, purchases, repayments and nested savings', () => {
-    expect(paths(validateInput('credit-card', { ...card, purchaseAmount: '100001' }))).toContain('purchaseAmount');
-    expect(paths(validateInput('credit-card', { ...card, repaymentDate: '2036-01-02' }))).toContain('repaymentDate');
+  it('bounds card funds, dates, budgets, repayments and nested savings', () => {
+    expect(paths(validateInput('credit-card', { ...card, monthlySpending: '-1' }))).toContain('monthlySpending');
+    expect(paths(validateInput('credit-card', { ...card, endDate: '2036-01-02' }))).toContain('endDate');
     expect(paths(validateInput('credit-card', { ...card, fees: '-1', creditLimit: '1000000000001' }))).toEqual(expect.arrayContaining(['fees', 'creditLimit']));
-    expect(paths(validateInput('credit-card', { ...card, repayments: [{ date: '2026-02-02', amount: '1' }] }))).toContain('repayments.0.date');
+    expect(paths(validateInput('credit-card', { ...card, repayments: [{ date: '2026-03-01', amount: '1' }] }))).toContain('repayments.0.date');
     expect(paths(validateInput('credit-card', { ...card, repayments: [{ date: '2026-01-02', amount: '0' }] }))).toContain('repayments.0.amount');
     expect(paths(validateInput('credit-card', { ...card, savings: { ...card.savings, basis: 'monthly-min', payout: 'daily' } }))).toContain('savings.payout');
+  });
+  it('normalizes card top-ups through the inclusive planning end', () => {
+    const result = validateInput('credit-card', { ...card, topUps: [
+      { date: '2026-01-01', amount: '1 000,50' },
+      { date: '2026-02-01', amount: '2000' },
+      { date: '2026-02-28', amount: '3000' },
+    ] });
+    expect(result.ok && result.value.topUps).toEqual([
+      { date: '2026-01-01', amount: '1000.50' },
+      { date: '2026-02-01', amount: '2000' },
+      { date: '2026-02-28', amount: '3000' },
+    ]);
+    for (const date of ['2025-12-31', '2026-03-01']) {
+      expect(paths(validateInput('credit-card', { ...card, topUps: [{ date, amount: '1' }] }))).toContain('topUps.0.date');
+    }
+  });
+  it.each(['', '0', '-1', '0.001', '1000000000000.01'])('rejects invalid card top-up amount %j', amount => {
+    expect(paths(validateInput('credit-card', { ...card, topUps: [{ date: '2026-01-02', amount }] }))).toContain('topUps.0.amount');
+  });
+  it('rejects malformed card top-up lists and rows', () => {
+    expect(paths(validateInput('credit-card', { ...card, topUps: null }))).toContain('topUps');
+    expect(paths(validateInput('credit-card', { ...card, topUps: [null] }))).toContain('topUps.0');
+  });
+  it('counts top-ups, repayments and rate changes toward the same card event limit', () => {
+    const topUps = Array.from({ length: 498 }, () => ({ date: '2026-01-02', amount: '1' }));
+    const input = { ...card, topUps, repayments: [{ date: '2026-01-03', amount: '1' }], savings: { ...card.savings, rateChanges: [{ date: '2026-01-04', annualRate: '13' }] } };
+    expect(validateInput('credit-card', input).ok).toBe(true);
+    expect(paths(validateInput('credit-card', { ...input, topUps: [...topUps, topUps[0]] }))).toContain('topUps');
+  });
+  it('normalizes recurring card top-up rules without replacing them with cash events', () => {
+    const result = validateInput('credit-card', { ...card, recurringTopUps: [{ ...recurring, amount: '1 000,50' }] });
+    expect(result.ok && result.value.recurringTopUps).toEqual([{ ...recurring, amount: '1000.50' }]);
+    expect(result.ok && result.value.topUps).toEqual([]);
+    for (const frequency of ['daily', 'weekly', 'monthly']) {
+      expect(validateInput('credit-card', { ...card, recurringTopUps: [{ ...recurring, endDate: '2026-01-01', frequency }] }).ok).toBe(true);
+    }
+  });
+  it.each([
+    ['amount', '0'], ['amount', '-1'], ['amount', '0.001'], ['amount', ''],
+    ['frequency', 'yearly'], ['startDate', '2025-12-31'], ['startDate', '2026-03-01'],
+    ['startDate', '2026-02-29'], ['endDate', '2026-03-01'], ['endDate', '2025-12-31'],
+    ['endDate', '2026-02-29'],
+  ])('rejects invalid recurring top-up %s: %s', (key, value) => {
+    expect(paths(validateInput('credit-card', { ...card, recurringTopUps: [{ ...recurring, [key]: value }] }))).toContain(`recurringTopUps.0.${key}`);
+  });
+  it('rejects a recurrence end before its first date and malformed rule lists', () => {
+    expect(paths(validateInput('credit-card', { ...card, recurringTopUps: [{ ...recurring, startDate: '2026-01-10', endDate: '2026-01-09' }] }))).toContain('recurringTopUps.0.endDate');
+    expect(paths(validateInput('credit-card', { ...card, recurringTopUps: null }))).toContain('recurringTopUps');
+    expect(paths(validateInput('credit-card', { ...card, recurringTopUps: [null] }))).toContain('recurringTopUps.0');
+  });
+  it('counts generated occurrences with manual top-ups, repayments and rate changes', () => {
+    // Two monthly occurrences + 496 manual deposits + one payment + one rate = 500.
+    const topUps = Array.from({ length: 496 }, () => ({ date: '2026-01-02', amount: '1' }));
+    const input = { ...card, topUps, recurringTopUps: [recurring], repayments: [{ date: '2026-01-03', amount: '1' }], savings: { ...card.savings, rateChanges: [{ date: '2026-01-04', annualRate: '13' }] } };
+    expect(validateInput('credit-card', input).ok).toBe(true);
+    expect(paths(validateInput('credit-card', { ...input, topUps: [...topUps, topUps[0]] }))).toContain('recurringTopUps');
+  });
+  it('rejects excessive generated occurrences without throwing or silently truncating', () => {
+    expect(paths(validateInput('credit-card', { ...card, endDate: '2035-12-31', recurringTopUps: [{ ...recurring, frequency: 'weekly' }] }))).toContain('recurringTopUps');
   });
   it('returns Russian issues for malformed nested data instead of throwing', () => {
     for (const value of [{}, { ...card, savings: null, repayments: [null] }, { ...savings, rateChanges: [null], events: [null] }]) {
@@ -82,11 +142,11 @@ describe('financial input validation', () => {
       if (!result.ok) expect(result.issues.every(issue => /[А-Яа-я]/u.test(issue.message))).toBe(true);
     }
   });
-  it('bounds the full card comparison through month end to ten calendar years', () => {
-    expect(validateInput('credit-card', { ...card, repaymentDate: '2035-12-31' }).ok).toBe(true);
-    expect(paths(validateInput('credit-card', { ...card, repaymentDate: '2036-01-01' }))).toContain('repaymentDate');
+  it('bounds the inclusive card planning horizon to ten calendar years', () => {
+    expect(validateInput('credit-card', { ...card, endDate: '2035-12-31' }).ok).toBe(true);
+    expect(paths(validateInput('credit-card', { ...card, endDate: '2036-01-01' }))).toContain('endDate');
   });
-  it('validates card rate changes through comparison month end and counts all events', () => {
+  it('validates card rate changes through the inclusive final date and counts all events', () => {
     expect(validateInput('credit-card', { ...card, savings: { ...card.savings, rateChanges: [{ date: '2026-02-28', annualRate: '13' }] } }).ok).toBe(true);
     expect(paths(validateInput('credit-card', { ...card, savings: { ...card.savings, rateChanges: [{ date: '2026-03-01', annualRate: '13' }] } }))).toContain('savings.rateChanges.0.date');
     const repayments = Array.from({ length: 500 }, () => ({ date: '2026-01-02', amount: '0.01' }));

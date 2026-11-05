@@ -1,6 +1,8 @@
-import { addMonthsClamped, firstOfNextMonth, isISODate } from './dates';
+import { addDays, addMonthsClamped, isISODate } from './dates';
+import { buildCardPlanningFlows, CardRepaymentError } from './card-planning-flows';
 import { FinanceDecimal, parseDecimalInput } from './money';
-import type { CalculatorKind, CashEvent, FieldIssue, Inputs, RateChange, SavingsTerms, Validation } from './types';
+import { expandRecurringTopUps } from './recurring-top-ups';
+import type { CalculatorKind, CardPlanningInput, CashEvent, FieldIssue, Inputs, RateChange, RecurringTopUp, SavingsTerms, Validation } from './types';
 
 type ObjectValue = Record<string, unknown>;
 const MAX_AMOUNT = '1000000000000';
@@ -104,6 +106,25 @@ class InputCheck {
     });
   }
 
+  recurringTopUps(values: unknown[], start: string, end: string): RecurringTopUp[] {
+    return values.slice(0, MAX_EVENTS).map((value, index) => {
+      const path = `recurringTopUps.${index}`;
+      const row = this.object(value, path);
+      const startDate = this.date(row.startDate, `${path}.startDate`);
+      const endDate = row.endDate === '' ? '' : this.date(row.endDate, `${path}.endDate`);
+      this.within(startDate, start, end, false, `${path}.startDate`);
+      this.within(endDate, start, end, false, `${path}.endDate`);
+      if (startDate && endDate && endDate < startDate) {
+        this.issue(`${path}.endDate`, 'Последнее пополнение не может быть раньше первого');
+      }
+      return {
+        amount: this.decimal(row.amount, `${path}.amount`, { positive: true }),
+        startDate, endDate,
+        frequency: this.choice(row.frequency, `${path}.frequency`, ['daily', 'weekly', 'monthly']),
+      };
+    });
+  }
+
   savingsTerms(row: ObjectValue, prefix: string, start: string, end: string, rates: unknown[]): SavingsTerms {
     const path = (key: string) => `${prefix}${key}`;
     const basis = this.choice(row.basis, path('basis'), ['daily', 'monthly-min']);
@@ -118,7 +139,63 @@ class InputCheck {
   }
 }
 
+export function validateCardPlanningInput(value: unknown): Validation<CardPlanningInput> {
+  const check = new InputCheck();
+  const row = check.object(value, '');
+  const startDate = check.date(row.startDate, 'startDate');
+  const endDate = check.date(row.endDate, 'endDate');
+  let exclusiveEnd = '';
+  if (endDate) {
+    try { exclusiveEnd = addDays(endDate, 1); }
+    catch { check.issue('endDate', 'Дата окончания выходит за пределы календаря'); }
+  }
+  check.period(startDate, exclusiveEnd, 'endDate', 'Период — от одного дня до 10 календарных лет');
+  if (typeof row.repaymentDay !== 'number' || !Number.isInteger(row.repaymentDay) || row.repaymentDay < 1 || row.repaymentDay > 31) {
+    check.issue('repaymentDay', 'Укажите целое число от 1 до 31');
+  }
+  const overrides = check.object(row.spendingOverrides, 'spendingOverrides');
+  const entries = Object.entries(overrides);
+  if (entries.length > MAX_EVENTS) check.issue('spendingOverrides', 'Допустимо не более 500 исправленных месяцев');
+  const spendingOverrides = Object.fromEntries(entries.slice(0, MAX_EVENTS).map(([month, amount]) => {
+    const path = `spendingOverrides.${month}`;
+    if (!/^\d{4}-\d{2}$/.test(month) || !isISODate(`${month}-01`)) check.issue(path, 'Укажите существующий месяц в формате ГГГГ-ММ');
+    return [month, check.decimal(amount, path)];
+  }));
+  const terms = check.object(row.savings, 'savings');
+  const topUps = check.list(row.topUps, 'topUps');
+  const recurringRows = check.list(row.recurringTopUps, 'recurringTopUps');
+  const repayments = check.list(row.repayments, 'repayments');
+  const rates = check.list(terms.rateChanges, 'savings.rateChanges');
+  check.count(repayments, rates, 'repayments');
+  check.count(topUps, [...repayments, ...rates], 'topUps');
+  check.count(recurringRows, [], 'recurringTopUps');
+  const normalized: CardPlanningInput = {
+    ownFunds: check.decimal(row.ownFunds, 'ownFunds'), creditLimit: check.decimal(row.creditLimit, 'creditLimit'),
+    startDate, endDate, monthlySpending: check.decimal(row.monthlySpending, 'monthlySpending'), spendingOverrides,
+    repaymentDay: typeof row.repaymentDay === 'number' ? row.repaymentDay : 0, fees: check.decimal(row.fees, 'fees'),
+    topUps: check.cashEvents(topUps, 'topUps', startDate, exclusiveEnd, false, true),
+    repayments: check.cashEvents(repayments, 'repayments', startDate, exclusiveEnd, false, true),
+    recurringTopUps: check.recurringTopUps(recurringRows, startDate, exclusiveEnd),
+    savings: check.savingsTerms(terms, 'savings.', startDate, exclusiveEnd, rates),
+  };
+  if (!check.issues.length) {
+    try {
+      const generated = expandRecurringTopUps(normalized.recurringTopUps, exclusiveEnd);
+      check.count([...topUps, ...generated], [...repayments, ...rates], 'recurringTopUps');
+    } catch { check.issue('recurringTopUps', 'С учётом повторов допустимо не более 500 датированных событий суммарно'); }
+  }
+  if (!check.issues.length) {
+    try { buildCardPlanningFlows(normalized); }
+    catch (error) {
+      if (!(error instanceof CardRepaymentError)) throw error;
+      check.issue(`repayments.${error.index}.amount`, error.message);
+    }
+  }
+  return check.issues.length ? { ok: false, issues: check.issues } : { ok: true, value: normalized };
+}
+
 export function validateInput<K extends CalculatorKind>(kind: K, value: unknown): Validation<Inputs[K]> {
+  if (kind === 'credit-card') return validateCardPlanningInput(value) as Validation<Inputs[K]>;
   const check = new InputCheck();
   const row = check.object(value, '');
   let normalized: Inputs[CalculatorKind];
@@ -134,29 +211,6 @@ export function validateInput<K extends CalculatorKind>(kind: K, value: unknown)
       issuedOn: check.date(row.issuedOn, 'issuedOn'),
       scheme: check.choice(row.scheme, 'scheme', ['annuity', 'differentiated']),
       upfrontFee: check.decimal(row.upfrontFee, 'upfrontFee'), monthlyFee: check.decimal(row.monthlyFee, 'monthlyFee'),
-    };
-  } else if (kind === 'credit-card') {
-    const purchaseDate = check.date(row.purchaseDate, 'purchaseDate');
-    const repaymentDate = check.date(row.repaymentDate, 'repaymentDate');
-    check.period(purchaseDate, repaymentDate, 'repaymentDate');
-    let comparisonEnd = '';
-    if (repaymentDate) {
-      try { comparisonEnd = firstOfNextMonth(repaymentDate); }
-      catch { check.issue('repaymentDate', 'Дата окончания сравнения выходит за пределы календаря'); }
-    }
-    check.period(purchaseDate, comparisonEnd, 'repaymentDate', 'Период сравнения до конца месяца погашения не должен превышать 10 календарных лет');
-    const ownFunds = check.decimal(row.ownFunds, 'ownFunds');
-    const purchaseAmount = check.decimal(row.purchaseAmount, 'purchaseAmount');
-    if (new FinanceDecimal(purchaseAmount).gt(ownFunds)) check.issue('purchaseAmount', 'Покупка не должна превышать собственные средства');
-    const terms = check.object(row.savings, 'savings');
-    const repayments = check.list(row.repayments, 'repayments');
-    const rates = check.list(terms.rateChanges, 'savings.rateChanges');
-    check.count(repayments, rates, 'repayments');
-    normalized = {
-      ownFunds, purchaseAmount, creditLimit: check.decimal(row.creditLimit, 'creditLimit'),
-      fees: check.decimal(row.fees, 'fees'), purchaseDate, repaymentDate,
-      repayments: check.cashEvents(repayments, 'repayments', purchaseDate, repaymentDate, true, true),
-      savings: check.savingsTerms(terms, 'savings.', purchaseDate, comparisonEnd, rates),
     };
   } else {
     const startDate = check.date(row.startDate, 'startDate');

@@ -6,18 +6,20 @@ import { validateInput } from '@/lib/finance/validation';
 import { useCalculator } from '@/hooks/use-calculator';
 import { FormField, FormSection } from './form-field';
 import { EventEditor } from './event-editor';
+import { RecurringTopUpEditor } from './recurring-top-up-editor';
+import { CardPlanningFields, type CardPlanningDraft } from './card-planning-fields';
 import { RateEditor } from './rate-editor';
 import { ResultPanel } from './result-panel';
 import styles from './calculator.module.css';
-type Draft = Inputs['deposit'] | Inputs['savings'] | Inputs['credit-card'] | (Omit<Inputs['loan'], 'months'> & { months: string });
-const toDraft = (input: Inputs[CalculatorKind]): Draft => 'months' in input ? { ...input, months: String(input.months) } : input;
+type Draft = Inputs['deposit'] | Inputs['savings'] | CardPlanningDraft | (Omit<Inputs['loan'], 'months'> & { months: string });
+const toDraft = (input: Inputs[CalculatorKind]): Draft => 'months' in input ? { ...input, months: String(input.months) } : 'repaymentDay' in input ? { ...input, repaymentDay: String(input.repaymentDay) } : input;
 export function CalculatorForm({ kind }: { kind: CalculatorKind }) {
   const calculator = useCalculator(kind, defaults[kind]);
   const [draft, setDraft] = useState<Draft>(() => toDraft(defaults[kind]));
   useEffect(() => { if (calculator.restored) setDraft(toDraft(calculator.input)); }, [calculator.restored]);
   function change(next: Draft) {
     setDraft(next);
-    const raw = 'months' in next ? { ...next, months: /^\d+$/.test(next.months) ? Number(next.months) : NaN } : next;
+    const raw = 'months' in next ? { ...next, months: /^\d+$/.test(next.months) ? Number(next.months) : NaN } : 'repaymentDay' in next ? { ...next, repaymentDay: /^\d+$/.test(next.repaymentDay) ? Number(next.repaymentDay) : NaN } : next;
     const checked = validateInput(kind, raw);
     if (checked.ok) calculator.setInput(checked.value); else calculator.invalidate(checked.issues);
   }
@@ -60,13 +62,17 @@ export function CalculatorForm({ kind }: { kind: CalculatorKind }) {
           <p className={styles.helper}>Месячная модель: годовая ставка / 12. Первая выплата через месяц после выдачи. Регулируемая ПСК не рассчитывается.</p>
         </>}
         {card && <>
-          {field('Собственные средства, ₽', 'ownFunds', card.ownFunds, ownFunds => change({ ...card, ownFunds }))}
-          {field('Стоимость покупки, ₽', 'purchaseAmount', card.purchaseAmount, purchaseAmount => change({ ...card, purchaseAmount }), { hint: 'Не больше собственных средств.' })}
-          {field('Кредитный лимит, ₽', 'creditLimit', card.creditLimit, creditLimit => change({ ...card, creditLimit }), { hint: 'Часть покупки сверх лимита оплачивается своими деньгами.' })}
-          <div className={styles.row}>{field('Дата покупки', 'purchaseDate', card.purchaseDate, purchaseDate => change({ ...card, purchaseDate }), { type: 'date' })}{field('Дата погашения', 'repaymentDate', card.repaymentDate, repaymentDate => change({ ...card, repaymentDate }), { type: 'date' })}</div>
+          {calculator.legacyCardInput && <p className={styles.resultNote} role="status">Модель расчёта обновилась: теперь расходы задаются по месяцам. Новые поля заполнены примером. Данные прежнего расчёта сохранены в этом браузере и не переносились автоматически.</p>}
+          <CardPlanningFields value={card} onChange={change} issues={calculator.issues} />
           <h3 className={styles.subheading}>Условия накопительного счёта</h3>{termsFields(card.savings, savings => change({ ...card, savings }), 'savings.')}
-          <FormSection title="Комиссии, погашения и изменения ставок">{field('Комиссии карты за весь период, ₽', 'fees', card.fees, fees => change({ ...card, fees }))}<EventEditor rows={card.repayments} onChange={repayments => change({ ...card, repayments })} path="repayments" startDate={card.purchaseDate} issues={calculator.issues} positive repayments /><RateEditor rows={card.savings.rateChanges} onChange={rateChanges => change({ ...card, savings: { ...card.savings, rateChanges } })} path="savings.rateChanges" startDate={card.purchaseDate} issues={calculator.issues} /></FormSection>
-          <p className={styles.helper}>Предполагается льготный период без процентов по карте. Минимальные платежи вводятся вручную. Сравнение — до конца месяца погашения, максимум 10 лет.</p>
+          <FormSection title="Пополнения, комиссии, погашения и изменения ставок">
+            <EventEditor rows={card.topUps} onChange={topUps => change({ ...card, topUps })} path="topUps" startDate={card.startDate} issues={calculator.issues} positive topUps />
+            <RecurringTopUpEditor rows={card.recurringTopUps} onChange={recurringTopUps => change({ ...card, recurringTopUps })} startDate={card.startDate} issues={calculator.issues} />
+            {field('Комиссии карты за весь период, ₽', 'fees', card.fees, fees => change({ ...card, fees }), { hint: 'Общая сумма за весь горизонт. Списывается один раз в конечную дату до начисления процентов.' })}
+            <EventEditor rows={card.repayments} onChange={repayments => change({ ...card, repayments })} path="repayments" startDate={card.startDate} issues={calculator.issues} positive repayments />
+            <RateEditor rows={card.savings.rateChanges} onChange={rateChanges => change({ ...card, savings: { ...card.savings, rateChanges } })} path="savings.rateChanges" startDate={card.startDate} issues={calculator.issues} />
+          </FormSection>
+          <p className={styles.helper}>Расчёт — по выбранную дату включительно, максимум 10 лет. Долг на эту дату вычитается из капитала. Предполагается использование карты без процентов; условия льготного периода проверьте по договору.</p>
         </>}
       </fieldset>
       {calculator.issues.length > 0 && <div className={styles.issueSummary} role="alert"><strong>Проверьте условия расчёта</strong><ul>{calculator.issues.map((issue, index) => <li key={`${issue.path}-${index}`}>{issue.message}</li>)}</ul></div>}
